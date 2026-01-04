@@ -32,6 +32,7 @@ interface Material {
 }
 
 interface Scene {
+  name: string;
   materials: Material[];
   logic: OpNode[];
 }
@@ -48,6 +49,7 @@ const createDefaultGeom = (matId = 0): Geometry => ({
 });
 
 const initialScene: Scene = {
+  name: "New Scene",
   materials: [
     { id: 0, name: "Gold", color: [1.0, 0.8, 0.4], type: 1, roughness: 0.1 },
     { id: 1, name: "White", color: [0.9, 0.9, 0.9], type: 0, roughness: 0.8 },
@@ -102,8 +104,11 @@ const App: React.FC = () => {
       }
       const opEntry = { type: node.type, shapeIdx, jumpTo: 0, isEnd: node.isEnd ? 1 : 0, isOut: node.isOut ? 1 : 0 };
       flatOps.push(opEntry);
-      if (node.type === 6 && node.children) {
-        node.children.forEach(processNode);
+      
+      if (node.type === 6) {
+        if (node.children) {
+          node.children.forEach(processNode);
+        }
         opEntry.jumpTo = flatOps.length;
       }
     };
@@ -118,7 +123,10 @@ const App: React.FC = () => {
 
     flatOps.slice(0, 34).forEach((op, i) => {
       const idx = (3 * 34 + i) * 4;
-      if (op.type === 6) buffer.set([6, op.shapeIdx, op.jumpTo, op.isEnd], idx);
+      if (op.type === 6) {
+        const safeJump = Math.min(op.jumpTo, 34);
+        buffer.set([6, op.shapeIdx, safeJump, op.isEnd], idx);
+      }
       else buffer.set([op.type, op.shapeIdx, op.isEnd, op.isOut], idx);
     });
 
@@ -126,12 +134,10 @@ const App: React.FC = () => {
       buffer.set([m.color[0], m.color[1], m.color[2], m.type + m.roughness], (4 * 34 + i) * 4);
     });
 
-    // Reset accumulation flag at (0, 5). Setting bufferA(0,5).x = 1.0 tells the shader to reset.
     buffer[(5 * 34 + 0) * 4] = 1.0; 
     shaderRef.current?.updateBufferData(buffer);
   }, [scene]);
 
-  // Sync on scene change AND on UI toggle to ensure Buffer A always has current data
   useEffect(() => {
     syncToGPU();
   }, [syncToGPU, showData]);
@@ -188,7 +194,6 @@ const App: React.FC = () => {
     }
   };
 
-  // --- DRAG AND DROP ---
   const handleDragStart = (path: number[]) => setDraggedPath(path);
   
   const isAncestor = (path: number[], target: number[]) => {
@@ -216,6 +221,7 @@ const App: React.FC = () => {
         actualTargetPath[actualTargetPath.length - 1]--;
       }
     }
+
     if (asChild) {
       let currentList = newScene.logic;
       for (let i = 0; i < actualTargetPath.length; i++) {
@@ -235,8 +241,6 @@ const App: React.FC = () => {
     setDraggedPath(null);
   };
 
-  // --- RENDERERS ---
-
   const SliderWithButtons = ({ label, value, min, max, step = 0.5, onChange }: any) => (
     <div className="flex flex-col gap-0.5 group w-full overflow-hidden">
       <div className="flex justify-between text-[7px] uppercase font-black text-sky-400 px-0.5">
@@ -244,21 +248,11 @@ const App: React.FC = () => {
         <span className="text-sky-600 font-mono">{Number(value).toFixed(2)}</span>
       </div>
       <div className="flex items-center gap-1 w-full">
-        <button 
-          onClick={() => onChange(parseFloat((value - step).toFixed(2)))}
-          className="w-5 h-4 flex-shrink-0 flex items-center justify-center bg-sky-50 text-sky-600 border border-sky-100 rounded hover:bg-sky-500 hover:text-white transition-colors text-[10px] font-bold"
-        >-</button>
+        <button onClick={() => onChange(parseFloat((value - step).toFixed(2)))} className="w-5 h-4 flex-shrink-0 flex items-center justify-center bg-sky-50 text-sky-600 border border-sky-100 rounded hover:bg-sky-500 hover:text-white transition-colors text-[10px] font-bold">-</button>
         <div className="flex-1 relative h-4 flex items-center">
-          <input 
-            type="range" min={min} max={max} step={step} value={value} 
-            onChange={e => onChange(parseFloat(e.target.value))} 
-            className="w-full h-1 bg-sky-100 rounded-lg appearance-none cursor-pointer accent-sky-500 m-0" 
-          />
+          <input type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(parseFloat(e.target.value))} className="w-full h-1 bg-sky-100 rounded-lg appearance-none cursor-pointer accent-sky-500 m-0" />
         </div>
-        <button 
-          onClick={() => onChange(parseFloat((value + step).toFixed(2)))}
-          className="w-5 h-4 flex-shrink-0 flex items-center justify-center bg-sky-50 text-sky-600 border border-sky-100 rounded hover:bg-sky-500 hover:text-white transition-colors text-[10px] font-bold"
-        >+</button>
+        <button onClick={() => onChange(parseFloat((value + step).toFixed(2)))} className="w-5 h-4 flex-shrink-0 flex items-center justify-center bg-sky-50 text-sky-600 border border-sky-100 rounded hover:bg-sky-500 hover:text-white transition-colors text-[10px] font-bold">+</button>
       </div>
     </div>
   );
@@ -269,15 +263,13 @@ const App: React.FC = () => {
         <span>{label}</span>
         <span className="text-sky-600">{Number(value).toFixed(2)}</span>
       </div>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(parseFloat(e.target.value))} 
-             className="w-full h-1 bg-sky-100 rounded-lg appearance-none cursor-pointer accent-sky-500" />
+      <input type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(parseFloat(e.target.value))} className="w-full h-1 bg-sky-100 rounded-lg appearance-none cursor-pointer accent-sky-500" />
     </div>
   );
 
   const renderLogicNode = (node: OpNode, path: number[]) => {
     const isExpanded = expandedId === node.id;
     const isAABB = node.type === 6;
-    const mat = scene.materials.find(m => m.id === node.geometry?.matId);
 
     const updateNode = (fields: Partial<OpNode>) => {
       const next = JSON.parse(JSON.stringify(scene));
@@ -292,43 +284,27 @@ const App: React.FC = () => {
       <div 
         key={node.id} 
         onDragOver={e => { e.preventDefault(); e.stopPropagation(); }}
-        onDrop={e => { e.stopPropagation(); handleDrop(path, isAABB); }}
+        onDrop={e => { e.stopPropagation(); handleDrop(path, false); }}
         className="mb-1"
       >
         <div className={`border rounded-lg transition-all shadow-sm overflow-hidden ${node.isOut ? 'bg-emerald-50 border-emerald-300 ring-1 ring-emerald-200' : isExpanded ? 'bg-sky-50 border-sky-300' : 'bg-white border-sky-100'}`}>
-          <div 
-            draggable
-            onDragStart={(e) => { e.stopPropagation(); handleDragStart(path); }}
-            className="flex items-center px-2 py-1.5 gap-2 cursor-grab active:cursor-grabbing hover:bg-sky-50/50"
-          >
+          <div draggable onDragStart={(e) => { e.stopPropagation(); handleDragStart(path); }} className="flex items-center px-2 py-1.5 gap-2 cursor-grab active:cursor-grabbing hover:bg-sky-50/50">
             <div onClick={() => setExpandedId(isExpanded ? null : node.id)} className="flex-1 cursor-pointer flex items-center justify-between overflow-hidden">
               <div className="flex items-center gap-2 overflow-hidden">
                 <div className={`w-1.5 h-1.5 flex-shrink-0 rounded-full ${isAABB ? 'bg-amber-400' : 'bg-sky-400'}`}></div>
                 <div className="flex items-baseline gap-2 overflow-hidden">
                   <span className="text-[10px] font-black text-sky-800 leading-none truncate">{node.name}</span>
-                  {!isExpanded && (
-                    <span className="text-[7px] font-bold text-sky-400 uppercase tracking-tighter truncate opacity-80">
-                      {OP_TYPES[node.type]} • {SHAPE_TYPES[node.geometry?.type || 0]}
-                    </span>
-                  )}
+                  {!isExpanded && <span className="text-[7px] font-bold text-sky-400 uppercase tracking-tighter truncate opacity-80">{OP_TYPES[node.type]} • {SHAPE_TYPES[node.geometry?.type || 0]}</span>}
                 </div>
               </div>
             </div>
             
             <div className="flex items-center gap-1.5 flex-shrink-0">
-              <button 
-                title="Duplicate Object"
-                onClick={(e) => { e.stopPropagation(); duplicateNode(path); }} 
-                className="text-sky-300 hover:text-sky-600 transition-colors"
-              >
+              <button onClick={(e) => { e.stopPropagation(); duplicateNode(path); }} className="text-sky-300 hover:text-sky-600 transition-colors">
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" /></svg>
               </button>
               {!node.children?.length && (
-                <button 
-                  title="Delete Object"
-                  onClick={(e) => { e.stopPropagation(); deleteNode(path); }} 
-                  className="text-rose-200 hover:text-rose-500 transition-colors"
-                >
+                <button onClick={(e) => { e.stopPropagation(); deleteNode(path); }} className="text-rose-200 hover:text-rose-500 transition-colors">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
               )}
@@ -367,16 +343,12 @@ const App: React.FC = () => {
                     </div>
                   </div>
                   
-                  {/* TWO COLUMNS FOR POS AND SIZE */}
                   <div className="grid grid-cols-2 gap-2">
-                    {/* POSITION COLUMN */}
                     <div className="space-y-2 border-r border-sky-50 pr-2">
                       <SliderWithButtons label="Pos X" value={node.geometry.pos[0]} min={-20} max={20} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, pos: [v, node.geometry!.pos[1], node.geometry!.pos[2]] } })} />
                       <SliderWithButtons label="Pos Y" value={node.geometry.pos[1]} min={-20} max={20} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, pos: [node.geometry!.pos[0], v, node.geometry!.pos[2]] } })} />
                       <SliderWithButtons label="Pos Z" value={node.geometry.pos[2]} min={-20} max={20} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, pos: [node.geometry!.pos[0], node.geometry!.pos[1], v] } })} />
                     </div>
-                    
-                    {/* DIMENSION COLUMN */}
                     <div className="space-y-2">
                       <SliderWithButtons label="Size W" value={node.geometry.size[0]} min={0.01} max={20} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, size: [v, node.geometry!.size[1], node.geometry!.size[2]] } })} />
                       <SliderWithButtons label="Size H" value={node.geometry.size[1]} min={0.01} max={20} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, size: [node.geometry!.size[0], v, node.geometry!.size[2]] } })} />
@@ -387,27 +359,13 @@ const App: React.FC = () => {
                   <div className="bg-sky-50/50 p-2 rounded space-y-2">
                     <div className="flex items-center justify-between">
                        <span className="text-[7px] font-black text-sky-400 uppercase">Rotation</span>
-                       <select 
-                          className="text-[8px] font-bold text-sky-700 bg-white border border-sky-100 rounded px-1"
-                          value={node.geometry.axis.join(',')} 
-                          onChange={e => {
-                            const axis = e.target.value.split(',').map(Number) as [number, number, number];
-                            updateNode({ geometry: { ...node.geometry!, axis } });
-                          }}
-                        >
+                       <select className="text-[8px] font-bold text-sky-700 bg-white border border-sky-100 rounded px-1" value={node.geometry.axis.join(',')} onChange={e => updateNode({ geometry: { ...node.geometry!, axis: e.target.value.split(',').map(Number) as [number, number, number] } })}>
                           <option value="1,0,0">X Axis</option>
                           <option value="0,1,0">Y Axis</option>
                           <option value="0,0,1">Z Axis</option>
                         </select>
                     </div>
-                    <SliderSimple 
-                      label="Angle (Snap 45°)" 
-                      value={node.geometry.angle} 
-                      min={-PI} 
-                      max={PI} 
-                      step={PI / 4} 
-                      onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, angle: v } })} 
-                    />
+                    <SliderSimple label="Angle (Snap 45°)" value={node.geometry.angle} min={-PI} max={PI} step={PI / 4} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, angle: v } })} />
                   </div>
                 </div>
               )}
@@ -418,8 +376,7 @@ const App: React.FC = () => {
               </div>
 
               {isAABB && (
-                <button onClick={() => updateNode({ children: [...(node.children || []), { id: Math.random().toString(), name: "New Op", type: 0, geometry: createDefaultGeom(node.geometry?.matId || 0), isEnd: false, isOut: true }] })}
-                        className="w-full py-1 bg-sky-100 text-sky-600 text-[8px] font-black uppercase rounded hover:bg-sky-500 hover:text-white transition-all">+ Add Child</button>
+                <button onClick={() => updateNode({ children: [...(node.children || []), { id: Math.random().toString(), name: "New Op", type: 0, geometry: createDefaultGeom(node.geometry?.matId || 0), isEnd: false, isOut: true }] })} className="w-full py-1 bg-sky-100 text-sky-600 text-[8px] font-black uppercase rounded hover:bg-sky-500 hover:text-white transition-all">+ Add Child</button>
               )}
             </div>
           )}
@@ -439,7 +396,7 @@ const App: React.FC = () => {
         <ShaderCanvas ref={shaderRef} />
         <div className="absolute top-4 left-4 z-20 flex gap-2">
           <button onClick={syncToGPU} className="px-5 h-10 bg-sky-500 text-white font-black uppercase tracking-widest text-xs rounded-xl shadow-lg hover:bg-sky-600 transition-all active:scale-95 flex items-center gap-2">Force Sync</button>
-          <button onClick={() => setShowData(!showData)} className={`w-10 h-10 bg-white/90 border border-sky-100 rounded-xl shadow flex items-center justify-center text-sky-500 ${showData ? 'ring-2 ring-sky-400' : ''}`}>
+          <button onClick={() => { setShowData(!showData); syncToGPU(); }} className={`w-10 h-10 bg-white/90 border border-sky-100 rounded-xl shadow flex items-center justify-center text-sky-500 ${showData ? 'ring-2 ring-sky-400' : ''}`}>
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" /></svg>
           </button>
         </div>
@@ -448,30 +405,39 @@ const App: React.FC = () => {
       <div className="h-full bg-white/95 border-l border-sky-50 shadow-2xl transition-all duration-300 flex flex-col" style={{ width: showData ? '360px' : '0px' }}>
         <div className="w-[360px] flex-shrink-0 flex flex-col h-full overflow-hidden">
           <div className="p-4 flex flex-col gap-3">
-            <div className="flex justify-between items-center">
-              <h2 className="text-xl font-black text-sky-800 tracking-tighter uppercase">CSG Workspace</h2>
-              <div className="flex gap-2">
-                 <button onClick={() => {
+            <div className="flex justify-between items-center gap-2">
+              <input 
+                type="text" 
+                value={scene.name} 
+                onChange={e => setScene(prev => ({ ...prev, name: e.target.value }))}
+                className="flex-1 text-xl font-black text-sky-800 tracking-tighter uppercase bg-transparent border-b-2 border-transparent hover:border-sky-100 focus:border-sky-400 outline-none truncate pb-0.5"
+                placeholder="Scene Name"
+              />
+              <div className="flex gap-2 flex-shrink-0">
+                 <button onClick={() => { 
                    const a = document.createElement('a'); 
-                   const json = JSON.stringify(scene);
+                   const json = JSON.stringify(scene, null, 2); 
                    a.href = URL.createObjectURL(new Blob([json], {type: 'application/json'})); 
-                   a.download='scene.json'; a.click();
+                   a.download = `${scene.name.toLowerCase().replace(/\s+/g, '-')}.json`; 
+                   a.click(); 
                  }} className="text-[8px] font-black uppercase text-sky-400 hover:text-sky-600 transition-colors">Export</button>
                  <button onClick={() => fileInputRef.current?.click()} className="text-[8px] font-black uppercase text-sky-400 hover:text-sky-600 transition-colors">Import</button>
-                 <input ref={fileInputRef} type="file" className="hidden" onChange={e => {
+                 <input ref={fileInputRef} type="file" className="hidden" onChange={e => { 
                    const f = e.target.files?.[0]; 
                    if(f) { 
                      const r = new FileReader(); 
-                     r.onload=ev=>{
-                       try {
-                         const data = JSON.parse(ev.target?.result as string);
-                         if (data && data.logic && data.materials) setScene(data);
-                       } catch(err) {
-                         alert("Invalid JSON file");
-                       }
+                     r.onload = ev => { 
+                       try { 
+                         const data = JSON.parse(ev.target?.result as string); 
+                         if (data && data.logic && data.materials) {
+                           // Fallback se il file non ha un nome (vecchi export)
+                           if (!data.name) data.name = f.name.replace('.json', '');
+                           setScene(data); 
+                         }
+                       } catch(err) { alert("Invalid JSON file"); } 
                      }; 
                      r.readAsText(f); 
-                   }
+                   } 
                  }} />
               </div>
             </div>
@@ -482,12 +448,10 @@ const App: React.FC = () => {
             </div>
 
             {activeTab === 'logic' && (
-              <button onClick={() => setScene(p => ({ ...p, logic: [...p.logic, { id: Math.random().toString(), name: "Root Op", type: 0, geometry: createDefaultGeom(0), isEnd: false, isOut: true }] }))} 
-                      className="w-full py-2 bg-sky-500 text-white text-[9px] font-black uppercase rounded-lg shadow-md hover:bg-sky-600 transition-all">+ Add Root Operation</button>
+              <button onClick={() => setScene(p => ({ ...p, logic: [...p.logic, { id: Math.random().toString(), name: "Root Op", type: 0, geometry: createDefaultGeom(0), isEnd: false, isOut: true }] }))} className="w-full py-2 bg-sky-500 text-white text-[9px] font-black uppercase rounded-lg shadow-md hover:bg-sky-600 transition-all">+ Add Root Operation</button>
             )}
             {activeTab === 'materials' && (
-              <button onClick={() => setScene(p => ({ ...p, materials: [...p.materials, { id: p.materials.length, name: "New Mat", color: [0.5, 0.5, 0.5], type: 0, roughness: 0.5 }] }))} 
-                      className="w-full py-2 bg-sky-500 text-white text-[9px] font-black uppercase rounded-lg shadow-md hover:bg-sky-600 transition-all">+ Add Material</button>
+              <button onClick={() => setScene(p => ({ ...p, materials: [...p.materials, { id: p.materials.length, name: "New Mat", color: [0.5, 0.5, 0.5], type: 0, roughness: 0.5 }] }))} className="w-full py-2 bg-sky-500 text-white text-[9px] font-black uppercase rounded-lg shadow-md hover:bg-sky-600 transition-all">+ Add Material</button>
             )}
           </div>
 
@@ -496,13 +460,7 @@ const App: React.FC = () => {
             {activeTab === 'materials' && scene.materials.map((mat, i) => {
               const isUsed = usedMaterialIds.has(mat.id);
               const isExpanded = expandedId === `mat-${mat.id}`;
-
-              const updateMat = (fields: Partial<Material>) => {
-                const next = JSON.parse(JSON.stringify(scene));
-                next.materials[i] = { ...next.materials[i], ...fields };
-                setScene(next);
-              };
-
+              const updateMat = (fields: Partial<Material>) => { const next = JSON.parse(JSON.stringify(scene)); next.materials[i] = { ...next.materials[i], ...fields }; setScene(next); };
               return (
                 <div key={i} className={`border rounded-lg bg-white transition-all border-sky-100 shadow-sm ${!isUsed ? 'opacity-40 grayscale' : 'hover:border-sky-300'}`}>
                   <div className="p-2.5 flex items-center justify-between cursor-pointer" onClick={() => setExpandedId(isExpanded ? null : `mat-${mat.id}`)}>
@@ -513,13 +471,7 @@ const App: React.FC = () => {
                         {!isExpanded && <span className="text-[7px] font-bold text-sky-400 uppercase tracking-widest">{MAT_TYPES[mat.type]} • R {mat.roughness.toFixed(2)}</span>}
                       </div>
                     </div>
-                    {!isUsed && (
-                      <button onClick={(e) => { e.stopPropagation(); setScene(p => ({ ...p, materials: p.materials.filter((_, idx) => idx !== i) })); }} className="text-rose-400 hover:text-rose-600 transition-colors">
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
-                      </button>
-                    )}
                   </div>
-                  
                   {isExpanded && (
                     <div className="px-3 pb-3 border-t border-sky-50 space-y-3 pt-3 bg-sky-50/20">
                       <div className="grid grid-cols-2 gap-3">
@@ -534,7 +486,6 @@ const App: React.FC = () => {
                           </select>
                         </div>
                       </div>
-                      
                       <div className="flex gap-4 items-end">
                         <div className="flex-shrink-0">
                           <label className="text-[7px] font-black text-sky-400 uppercase block mb-1">Color Picker</label>
