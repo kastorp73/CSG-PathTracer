@@ -1,0 +1,5 @@
+{
+  "name": "Declarative CSG Raytracer Wrapper",
+  "description": "A high-performance WebGL2 wrapper for a declarative CSG path tracer, supporting multi-pass rendering and persistence buffers.",
+  "requestFramePermissions": []
+}

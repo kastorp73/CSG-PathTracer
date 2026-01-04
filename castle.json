@@ -1,0 +1,115 @@
+
+{
+  "materials": [
+    { "id": 0, "name": "Grass Green", "color": [0.122, 0.678, 0.286], "type": 0, "roughness": 0.9 },
+    { "id": 1, "name": "Dark Forest", "color": [0.114, 0.243, 0.153], "type": 0, "roughness": 0.9 },
+    { "id": 2, "name": "Castle Stone", "color": [0.173, 0.173, 0.208], "type": 0, "roughness": 0.4 },
+    { "id": 3, "name": "Ancient Wood", "color": [0.4, 0.25, 0.12], "type": 0, "roughness": 0.1 },
+    { "id": 4, "name": "Deep Water", "color": [0.08, 0.2, 0.25], "type": 1, "roughness": 0.02 },
+    { "id": 5, "name": "Dark Metal", "color": [0.067, 0.055, 0.055], "type": 0, "roughness": 0.1 },
+    { "id": 6, "name": "Roof Clay", "color": [0.196, 0.122, 0.122], "type": 0, "roughness": 0.3 },
+    { "id": 7, "name": "Tree Leaves", "color": [0.012, 0.09, 0.024], "type": 0, "roughness": 0.4 }
+  ],
+  "logic": [
+    {
+      "id": "ground-plane",
+      "name": "Infinite Ground",
+      "type": 0,
+      "isEnd": false,
+      "isOut": true,
+      "geometry": { "type": 0, "pos": [0, 0, 0], "size": [20, 0, 20], "axis": [0, 1, 0], "angle": 0, "matId": 1 }
+    },
+    {
+      "id": "castle-aabb",
+      "name": "Castle Group",
+      "type": 6,
+      "isEnd": false,
+      "isOut": false,
+      "geometry": { "type": 0, "pos": [0, 4, 0], "size": [10, 4, 10], "axis": [0, 1, 0], "angle": 0, "matId": 5 },
+      "children": [
+        {
+          "id": "main-keep",
+          "name": "Main Keep",
+          "type": 0,
+          "isEnd": false,
+          "isOut": true,
+          "geometry": { "type": 0, "pos": [0, 1.6, 0], "size": [6.5, 1.6, 6.5], "axis": [0, 0, 0], "angle": 0, "matId": 2 }
+        },
+        {
+          "id": "keep-interior",
+          "name": "Keep Interior",
+          "type": 2,
+          "isEnd": false,
+          "isOut": true,
+          "geometry": { "type": 0, "pos": [0, 1.8, 0], "size": [5.6, 1.5, 5.6], "axis": [0, 0, 0], "angle": 0, "matId": 6 }
+        },
+        {
+          "id": "central-tower",
+          "name": "Central Tower",
+          "type": 0,
+          "isEnd": false,
+          "isOut": true,
+          "geometry": { "type": 0, "pos": [0, 3.4, 0], "size": [2.2, 3.2, 2.2], "axis": [0, 0, 0], "angle": 0, "matId": 2 }
+        },
+        {
+          "id": "t1-base",
+          "name": "Tower NW Base",
+          "type": 0,
+          "isEnd": false,
+          "isOut": true,
+          "geometry": { "type": 2, "pos": [-5.8, 2.4, -5.8], "size": [1.2, 2.4, 1.2], "axis": [1, 0, 0], "angle": 1.57, "matId": 2 }
+        },
+        {
+          "id": "t2-base",
+          "name": "Tower NE Base",
+          "type": 0,
+          "isEnd": false,
+          "isOut": true,
+          "geometry": { "type": 2, "pos": [5.8, 2.4, -5.8], "size": [1.2, 2.4, 1.2], "axis": [1, 0, 0], "angle": 1.57, "matId": 2 }
+        },
+        {
+          "id": "t1-roof",
+          "name": "Tower NW Roof",
+          "type": 0,
+          "isEnd": false,
+          "isOut": true,
+          "geometry": { "type": 3, "pos": [-5.8, 5.75, -5.8], "size": [1.45, 0.35, 1.45], "axis": [1, 0, 0], "angle": 1.57, "matId": 5 }
+        },
+        {
+          "id": "bridge",
+          "name": "Drawbridge",
+          "type": 0,
+          "isEnd": false,
+          "isOut": true,
+          "geometry": { "type": 0, "pos": [0, 0.45, 6.2], "size": [1.2, 0.1, 1.2], "axis": [1, 0, 0], "angle": 0, "matId": 3 }
+        }
+      ]
+    },
+    {
+      "id": "village-aabb",
+      "name": "Village West",
+      "type": 6,
+      "isEnd": false,
+      "isOut": false,
+      "geometry": { "type": 0, "pos": [-15, 2, 0], "size": [5, 3, 8], "axis": [0, 0, 0], "angle": 0, "matId": 5 },
+      "children": [
+        {
+          "id": "house-1",
+          "name": "House 1",
+          "type": 0,
+          "isEnd": false,
+          "isOut": true,
+          "geometry": { "type": 1, "pos": [-11, 1.5, 0], "size": [1, 2, 1], "axis": [0, 0, 0], "angle": 0, "matId": 7 }
+        },
+        {
+          "id": "house-2",
+          "name": "House 2",
+          "type": 0,
+          "isEnd": false,
+          "isOut": true,
+          "geometry": { "type": 1, "pos": [-13, 1.5, 5], "size": [1, 2, 1], "axis": [0, 0, 0], "angle": 0, "matId": 7 }
+        }
+      ]
+    }
+  ]
+}
