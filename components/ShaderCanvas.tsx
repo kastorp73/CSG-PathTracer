@@ -1,6 +1,6 @@
-
 import React, { useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { bufferAShader, mainShader, displayShader } from '../constants/shaders';
+import { MAX_OPS } from '../constants/config';
 
 export interface ShaderCanvasHandle {
   getBufferData: () => Float32Array | null;
@@ -27,7 +27,7 @@ export const ShaderCanvas = forwardRef<ShaderCanvasHandle>((props, ref) => {
       const gl = glRef.current;
       if (!gl || framebuffersARef.current.length === 0) return null;
       
-      const width = 34; 
+      const width = MAX_OPS; 
       const height = 6; 
       const data = new Float32Array(width * height * 4);
       
@@ -41,12 +41,21 @@ export const ShaderCanvas = forwardRef<ShaderCanvasHandle>((props, ref) => {
       const gl = glRef.current;
       if (!gl || texturesARef.current.length === 0) return;
       
-      const width = 34;
-      const height = 5; 
+      const width = MAX_OPS;
+      const row5Offset = 5 * width * 4;
       
       for (let i = 0; i < 2; i++) {
         gl.bindTexture(gl.TEXTURE_2D, texturesARef.current[i]);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RGBA, gl.FLOAT, data.subarray(0, width * height * 4));
+        
+        // Update rows 0-4: Shapes, Ops, and Materials
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, 5, gl.RGBA, gl.FLOAT, data.subarray(0, width * 5 * 4));
+        
+        // Selectively update row 5 to avoid overwriting camera state (x=1, x=2)
+        // Update p.x=0 (Reset flag)
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 5, 1, 1, gl.RGBA, gl.FLOAT, data.subarray(row5Offset, row5Offset + 4));
+        
+        // Update p.x=3 (Fast Render flag)
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 3, 5, 1, 1, gl.RGBA, gl.FLOAT, data.subarray(row5Offset + 12, row5Offset + 16));
       }
       gl.bindTexture(gl.TEXTURE_2D, null);
     }

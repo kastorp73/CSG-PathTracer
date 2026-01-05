@@ -1,6 +1,7 @@
-
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { ShaderCanvas, ShaderCanvasHandle } from './components/ShaderCanvas';
+import { initialScene } from './constants/initialScene';
+import { MAX_OPS } from './constants/config';
 
 // --- TYPES ---
 
@@ -48,37 +49,28 @@ const createDefaultGeom = (matId = 0): Geometry => ({
   type: 0, pos: [0, 0, 0], size: [1, 1, 1], axis: [0, 1, 0], angle: 0, matId
 });
 
-const initialScene: Scene = {
-  name: "New Scene",
-  materials: [
-    { id: 0, name: "Gold", color: [1.0, 0.8, 0.4], type: 1, roughness: 0.1 },
-    { id: 1, name: "White", color: [0.9, 0.9, 0.9], type: 0, roughness: 0.8 },
-  ],
-  logic: [
-    {
-      id: "root-1", name: "Scene Root", type: 6, geometry: createDefaultGeom(0),
-      isEnd: false, isOut: false,
-      children: [
-        { id: "floor-1", name: "Ground", type: 0, geometry: { ...createDefaultGeom(1), pos: [0, -1, 0], size: [10, 0.1, 10] }, isEnd: false, isOut: true }
-      ]
-    }
-  ]
-};
-
 // --- APP ---
 
 const App: React.FC = () => {
-  const [scene, setScene] = useState<Scene>(initialScene);
+  const [scene, setScene] = useState<Scene>(initialScene as Scene);
   const [activeTab, setActiveTab] = useState<'logic' | 'materials'>('logic');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showData, setShowData] = useState(true);
   const [draggedPath, setDraggedPath] = useState<number[] | null>(null);
+  const [isFastRender, setIsFastRender] = useState(false);
   
   const shaderRef = useRef<ShaderCanvasHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- HELPERS ---
+	const onToggleShowData = () => {
+	  setShowData(s => !s);
 
+	  window.setTimeout(() => {
+		syncToGPU();
+	  }, 1000);
+	};
+	
   const usedMaterialIds = useMemo(() => {
     const ids = new Set<number>();
     const walk = (nodes: OpNode[]) => {
@@ -91,56 +83,72 @@ const App: React.FC = () => {
     return ids;
   }, [scene.logic]);
 
-  const syncToGPU = useCallback(() => {
-    const buffer = new Float32Array(34 * 6 * 4);
-    const flatShapes: Geometry[] = [];
-    const flatOps: any[] = [];
+	const syncToGPU = () => {
+	  const buffer = new Float32Array(MAX_OPS * 6 * 4);
+	  const flatShapes: Geometry[] = [];
+	  const flatOps: any[] = [];
 
-    const processNode = (node: OpNode) => {
-      let shapeIdx = -1;
-      if (node.geometry) {
-        shapeIdx = flatShapes.length;
-        flatShapes.push(node.geometry);
-      }
-      const opEntry = { type: node.type, shapeIdx, jumpTo: 0, isEnd: node.isEnd ? 1 : 0, isOut: node.isOut ? 1 : 0 };
-      flatOps.push(opEntry);
-      
-      if (node.type === 6) {
-        if (node.children) {
-          node.children.forEach(processNode);
-        }
-        opEntry.jumpTo = flatOps.length;
-      }
-    };
+	  const processNode = (node: OpNode) => {
+		let shapeIdx = -1;
+		if (node.geometry) {
+		  shapeIdx = flatShapes.length;
+		  flatShapes.push(node.geometry);
+		}
+		const opEntry = {
+		  type: node.type,
+		  shapeIdx,
+		  jumpTo: 0,
+		  isEnd: node.isEnd ? 1 : 0,
+		  isOut: node.isOut ? 1 : 0
+		};
+		flatOps.push(opEntry);
 
-    scene.logic.forEach(processNode);
+		if (node.type === 6) {
+		  node.children?.forEach(processNode);
+		  opEntry.jumpTo = flatOps.length;
+		}
+	  };
 
-    flatShapes.slice(0, 34).forEach((s, i) => {
-      buffer.set([s.pos[0], s.pos[1], s.pos[2], s.type], (0 * 34 + i) * 4);
-      buffer.set([s.size[0], s.size[1], s.size[2], s.matId], (1 * 34 + i) * 4);
-      buffer.set([s.axis[0], s.axis[1], s.axis[2], s.angle], (2 * 34 + i) * 4);
-    });
+	  scene.logic.forEach(processNode);
 
-    flatOps.slice(0, 34).forEach((op, i) => {
-      const idx = (3 * 34 + i) * 4;
-      if (op.type === 6) {
-        const safeJump = Math.min(op.jumpTo, 34);
-        buffer.set([6, op.shapeIdx, safeJump, op.isEnd], idx);
-      }
-      else buffer.set([op.type, op.shapeIdx, op.isEnd, op.isOut], idx);
-    });
+	  flatShapes.slice(0, MAX_OPS).forEach((s, i) => {
+		buffer.set([s.pos[0], s.pos[1], s.pos[2], s.type], (0 * MAX_OPS + i) * 4);
+		buffer.set([s.size[0], s.size[1], s.size[2], s.matId], (1 * MAX_OPS + i) * 4);
+		buffer.set([s.axis[0], s.axis[1], s.axis[2], s.angle], (2 * MAX_OPS + i) * 4);
+	  });
 
-    scene.materials.slice(0, 8).forEach((m, i) => {
-      buffer.set([m.color[0], m.color[1], m.color[2], m.type + m.roughness], (4 * 34 + i) * 4);
-    });
+	  flatOps.slice(0, MAX_OPS).forEach((op, i) => {
+		const idx = (3 * MAX_OPS + i) * 4;
+		if (op.type === 6) {
+		  const safeJump = Math.min(op.jumpTo, MAX_OPS);
+		  buffer.set([6, op.shapeIdx, safeJump, op.isEnd], idx);
+		} else {
+		  buffer.set([op.type, op.shapeIdx, op.isEnd, op.isOut], idx);
+		}
+	  });
 
-    buffer[(5 * 34 + 0) * 4] = 1.0; 
+	  scene.materials.slice(0, 8).forEach((m, i) => {
+		buffer.set([m.color[0], m.color[1], m.color[2], m.type + m.roughness], (4 * MAX_OPS + i) * 4);
+	  });
+
+	  // Row 5 handles system flags and camera state
+	  buffer[(5 * MAX_OPS + 0) * 4] = 1.0; // Reset flag
+    buffer[(5 * MAX_OPS + 3) * 4] = isFastRender ? 1.0 : 0.0; // Fast render mode flag (p.x=3, y=5)
+	  
     shaderRef.current?.updateBufferData(buffer);
-  }, [scene]);
+	};
 
+	useEffect(() => {
+	  syncToGPU();
+	}, [scene, isFastRender]);
+
+  // Forzatura sync differito dopo caricamento iniziale
   useEffect(() => {
-    syncToGPU();
-  }, [syncToGPU, showData]);
+    const timer = window.setTimeout(() => {
+      syncToGPU();
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const toSRGB = (c: number) => c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1.0/2.4) - 0.055;
   const toLinear = (c: number) => {
@@ -396,8 +404,19 @@ const App: React.FC = () => {
         <ShaderCanvas ref={shaderRef} />
         <div className="absolute top-4 left-4 z-20 flex gap-2">
           <button onClick={syncToGPU} className="px-5 h-10 bg-sky-500 text-white font-black uppercase tracking-widest text-xs rounded-xl shadow-lg hover:bg-sky-600 transition-all active:scale-95 flex items-center gap-2">Force Sync</button>
-          <button onClick={() => { setShowData(!showData); syncToGPU(); }} className={`w-10 h-10 bg-white/90 border border-sky-100 rounded-xl shadow flex items-center justify-center text-sky-500 ${showData ? 'ring-2 ring-sky-400' : ''}`}>
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" /></svg>
+ 		      <button 
+            onClick={() => setIsFastRender(!isFastRender)} 
+            className={`px-3 py-1.5 h-10 backdrop-blur-md text-[10px] font-black uppercase rounded-xl border shadow-lg transition-all flex items-center gap-2 ${
+              isFastRender 
+              ? 'bg-amber-500/80 text-white border-amber-600' 
+              : 'bg-white/80 text-sky-500 border-sky-100'
+            }`}
+          >
+            <div className={`w-1.5 h-1.5 rounded-full ${isFastRender ? 'bg-white animate-pulse' : 'bg-sky-300'}`}></div>
+            Fast Rendering
+          </button>
+          <button onClick={onToggleShowData}  className={`w-10 h-10 bg-white/90 border border-sky-100 rounded-xl shadow flex items-center justify-center text-sky-500 ${showData ? 'ring-2 ring-sky-400' : ''}`}>
+			<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" /></svg>
           </button>
         </div>
       </div>
@@ -418,7 +437,8 @@ const App: React.FC = () => {
                    const a = document.createElement('a'); 
                    const json = JSON.stringify(scene, null, 2); 
                    a.href = URL.createObjectURL(new Blob([json], {type: 'application/json'})); 
-                   a.download = `${scene.name.toLowerCase().replace(/\s+/g, '-')}.json`; 
+                   const fileName = (scene.name || "untitled").toLowerCase().replace(/\s+/g, '-');
+                   a.download = `${fileName}.json`; 
                    a.click(); 
                  }} className="text-[8px] font-black uppercase text-sky-400 hover:text-sky-600 transition-colors">Export</button>
                  <button onClick={() => fileInputRef.current?.click()} className="text-[8px] font-black uppercase text-sky-400 hover:text-sky-600 transition-colors">Import</button>
@@ -430,7 +450,7 @@ const App: React.FC = () => {
                        try { 
                          const data = JSON.parse(ev.target?.result as string); 
                          if (data && data.logic && data.materials) {
-                           // Fallback se il file non ha un nome (vecchi export)
+                           // Recupera il nome dalla proprietà JSON o dal nome del file
                            if (!data.name) data.name = f.name.replace('.json', '');
                            setScene(data); 
                          }
