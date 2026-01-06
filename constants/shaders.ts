@@ -55,7 +55,6 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
         if(p.x==0) fragColor = vec4(reset,mo*iResolution.xy,iResolution.x);
         else if(p.x==1) fragColor=vec4(ro,0);
         else if(p.x==2) fragColor=ta;
-        // p.x==3 (Fast Mode) is managed by JavaScript via state buffer upload
     }
 }
 
@@ -65,21 +64,26 @@ void main() {
 `;
 
 export const mainShader = `${header}
+
 // ============================================================
-// Main Pass: CSG Path Tracer (Linear Color)
+// "Declarative CSG Raytrace" by Kastorp
 // ============================================================
 
-#define LIGHTDIR vec3(-.4,.7,-.6)
-#define PATH_LENGTH 4
-#define ZERO min(0,iFrame)
-#define TOLERANCE 1e-4
+#define ZERO  min(0,iFrame)
+#define TOLERANCE  1e-4
 #define ITERATIONS 20
 #define VAXIS vec3(0,1,0)
 #define NOHIT 1e10
 #define QUANTIZATION 4.
+#define LIGHTDIR vec3(-.4,.7,-.6)
+#define PATH_LENGTH 3
+
+// material types
 #define LAMBERTIAN 0.
 #define METAL 1.
 #define DIELECTRIC 2.
+#define EMISSIVE 3.
+
 const float PI = 3.1415926535897932384626433832795;
 
 struct Hit {
@@ -93,26 +97,16 @@ struct Span {
     float mat;
 };
 
-
 Hit   NO_HIT()  { return Hit(NOHIT, vec3(0.0)); }
 Span  NO_SPAN() { Hit h = NO_HIT(); return Span(h,h,0.0); }
-
-// ------------------------------------------------------------
-// support mapping bits (your code, unchanged except robustness kept)
 
 vec3 supMax(vec3 d, vec3 a, vec3 b){ return dot(d,a) > dot(d,b) ? a : b; }
 
 struct sup{
     vec3 c;
-    vec3 b;   // bounding
-    int  s;   // 0 box,1 ellipsoid,2 cylinder,3 cone,4 segment
-//    mat3 rm;
+    vec3 b;   
+    int  s;   
 };
-
-float safeLen2(vec2 v){ return max(length(v), 1e-6); }
-float safeLen3(vec3 v){ return max(length(v), 1e-6); }
-
-
 
 vec2 octEncode(vec3 n)
 {
@@ -120,7 +114,7 @@ vec2 octEncode(vec3 n)
     vec2 e = n.xy;
     if (n.z < 0.0)
         e = (1.0 - abs(e.yx)) * sign(e.xy);
-    return e; // in [-1,1]
+    return e;
 }
 
 vec3 octDecode(vec2 e)
@@ -131,16 +125,17 @@ vec3 octDecode(vec2 e)
     return normalize(n);
 }
 
-vec3 octahedral(vec3 dir, float M) // M = risoluzione per lato (es. 16, 32)
+vec3 octahedral(vec3 dir, float M)
 {
     vec3 n = normalize(dir);
-    vec2 e = octEncode(n);          // [-1,1]
-    vec2 u = e*0.5 + 0.5;           // [0,1]
-    u = (floor(u*M) + 0.5) / M;     // centro cella
+    vec2 e = octEncode(n);
+    vec2 u = e*0.5 + 0.5;
+    u = (floor(u*M) + 0.5) / M;
     e = u*2.0 - 1.0;
     return octDecode(e);
 }
-vec3 support(vec3 dir, sup o,inout mat3 rm){
+
+vec3 support(vec3 dir, sup o, inout mat3 rm){
     vec3 s = vec3(0.0);
     dir = dir * rm;
     vec2 dxy = normalize(dir.xy);
@@ -148,426 +143,188 @@ vec3 support(vec3 dir, sup o,inout mat3 rm){
 
     switch(o.s){
         default:
-        case 0: // BOX
-            s = sign(dir) * o.b;
+        case 0: s = sign(dir) * o.b; break;
+        case 1: s = octahedral(dbn, QUANTIZATION*8.0) * o.b; break;
+        case 2: 
+            float a = atan(dir.x, dir.y), f = PI / QUANTIZATION;
+            a = (floor(a/f)+.5)*f;
+            s = supMax(dir, vec3(sin(a)*o.b.x, cos(a)*o.b.x, o.b.y), vec3(sin(a)*o.b.x, cos(a)*o.b.x, -o.b.y));
             break;
-        case 1: // ELLIPSOID
-              s=octahedral(dbn,QUANTIZATION*8.)*o.b;break; 
-
-              break;
-        case 2: // CYLINDER
-             float a = atan(dir.x, dir.y), f = PI / QUANTIZATION;
-             a = (floor(a/f)+.5)*f;
-             s = supMax(dir,
-                     vec3(sin(a) * o.b.x,cos(a)* o.b.x,  o.b.y),
-                     vec3(sin(a) * o.b.x,cos(a)* o.b.x, -o.b.y)
-                  );
-
+         case 3: 
+            float a_c = atan(dir.x, dir.y), f_c = PI / QUANTIZATION;
+            a_c = (floor(a_c/f_c)+.5)*f_c;
+            s = supMax(dir, vec3(sin(a_c)*o.b.x, cos(a_c)*o.b.x, o.b.z), vec3(0.0, 0.0, -o.b.z));
             break;
-         case 3: // CONE
-             a = atan(dir.x, dir.y), f = PI / QUANTIZATION;
-             a = (floor(a/f)+.5)*f;
-             s = supMax(dir,
-                     vec3(sin(a) * o.b.x,cos(a)* o.b.x,  o.b.z),
-                     vec3(0.0, 0.0, -o.b.z)
-                  );
-             break;
-        case 4: // SEGMENT
-            s = supMax(dir, (o.b-.1), -(o.b-.1)) + normalize(dir) * .1;
-            break;
+        case 4: s = supMax(dir, (o.b-.1), -(o.b-.1)) + normalize(dir) * .1; break;
     }
-
     return s * transpose(rm) + o.c;
 }
 
-
-// adapted from: https://www.shadertoy.com/view/wstyRB
-Span iSupportFunction(vec3 ro, vec3 rd, vec3 bb, int sh,bool csg)
+Span iSupportFunction(vec3 ro, vec3 rd, vec3 bb, int sh, bool csg)
 {
     Span noHit = NO_SPAN();
-
-    vec3 dir, tmp;
-    vec3 a,b,c,d;
-
+    vec3 a,b,c,d,tmp,dir;
     vec3 rx = normalize(cross(rd, VAXIS));
     vec3 ry = cross(rx, rd);
     mat3 rmai = mat3(rx,ry,rd), rma = transpose(rmai);
-
     float d0 = -dot(ro, rd);
     ro *= rmai;
     rd = vec3(0,0,1);
-
-    sup o;
-    o.b  = bb;
-    o.s  = int(sh);
-    //o.rm = rma;
-    o.c  = cross(cross(rd, ro), rd);
-
+    sup o; o.b = bb; o.s = int(sh); o.c = cross(cross(rd, ro), rd);
     #define perp2d(v) ((v).yx*vec2(-1,1))
-
     a = o.c;
-
-    b = support(vec3(-a.xy, 0.), o,rma);
+    b = support(vec3(-a.xy, 0.), o, rma);
     if(dot(-a.xy, b.xy) <= 0.0) return noHit;
-
     dir = vec3(perp2d(b-a), 0.0);
-    if(dot(dir.xy, a.xy) >= 0.0){
-        dir.xy *= -1.0;
-        tmp = a; a = b; b = tmp;
-    }
-
-    c = support(dir, o,rma);
+    if(dot(dir.xy, a.xy) >= 0.0){ dir.xy *= -1.0; tmp = a; a = b; b = tmp; }
+    c = support(dir, o, rma);
     if(dot(c.xy, dir.xy) <= 0.0) return noHit;
-
-    for(int i=0;; ++i){
+    for(int i=ZERO;; ++i){
         if(i==6) return noHit;
-        if(dot(dir.xy = perp2d(c-a), c.xy) < 0.0)      { b = c; }
+        if(dot(dir.xy = perp2d(c-a), c.xy) < 0.0) { b = c; }
         else if(dot(dir.xy = perp2d(b-c), c.xy) < 0.0) { a = c; }
         else break;
-
-        c = support(dir, o,rma);
+        c = support(dir, o, rma);
         if(dot(c.xy, dir.xy) <= 0.0) return noHit;
     }
-
-    Hit iN, iF=NO_HIT() ;
-
-    for(int j=0; j<=(csg?1:0); j++){
-        for(int i=0; i<ITERATIONS; ++i){
+    Hit iN, iF=NO_HIT();
+    for(int j=ZERO; j<=(csg?1:0); j++){
+        for(int i=ZERO; i<ITERATIONS; ++i){
             dir = normalize(cross(b-a, c-a));
             if(j>0) dir *= -1.0;
-
-            d = support(dir, o,rma);
-
+            d = support(dir, o, rma);
             if(abs(dot(dir, d) - dot(dir, a)) < TOLERANCE) break;
-            
-            bool ad = dot(perp2d(d-a), d.xy) > 0.0;
-            bool bd = dot(perp2d(d-b), d.xy) > 0.0;
-            bool cd = dot(perp2d(d-c), d.xy) > 0.0;
-
-            if(ad && !bd)      { c = d; }
-            else if(bd && !cd) { a = d; }
-            else if(cd && !ad) { b = d; }
+            if(dot(perp2d(d-a), d.xy) > 0.0 && !(dot(perp2d(d-b), d.xy) > 0.0)) { c = d; }
+            else if(dot(perp2d(d-b), d.xy) > 0.0 && !(dot(perp2d(d-c), d.xy) > 0.0)) { a = d; }
+            else if(dot(perp2d(d-c), d.xy) > 0.0 && !(dot(perp2d(d-a), d.xy) > 0.0)) { b = d; }
             else break;
         }
-
         vec3 normal = -normalize(cross(b-a, c-a));
         float depth = a.z + dot(a.xy, normal.xy)/normal.z;
         normal *= rma;
-
         Hit it = Hit(-depth + d0, normal);
         if(j==0) iN = it; else iF = it;
     }
-
     return Span(iN, iF, 0.0);
 }
-// ------------------------------------------------------------
-struct RayOut {
-    float d;
-    vec3  n;
-    float id;
-};
 
+struct RayOut { float d; vec3 n; float id; };
 RayOut NO_RAY() { return RayOut(NOHIT, vec3(0.0), 0.0); }
-
 bool spanAny(in Span s) { return s.n.t < NOHIT*0.5; }
 bool spanSel(in Span s) { return (s.n.t > TOLERANCE) && (s.n.t < NOHIT*0.5) && (s.f.t > TOLERANCE); }
-
 void FastAdd(inout RayOut a, RayOut b){ if(b.d < a.d) a = b; }
-
-RayOut rayFromSpan(Span s){
-    if(!spanSel(s)) return NO_RAY();
-    return RayOut(s.n.t, s.n.n, s.mat);
-}
-
-// ------------------------------------------------------------
-// CSG 
+RayOut rayFromSpan(Span s){ if(!spanSel(s)) return NO_RAY(); return RayOut(s.n.t, s.n.n, s.mat); }
 bool seq4(float a,float b,float c,float d){ return (a<b)&&(b<c)&&(c<d); }
 
 Span interSpan(Span a, Span b){
     if(!spanAny(a) || !spanAny(b)) return NO_SPAN();
-
     float an=a.n.t, af=a.f.t, bn=b.n.t, bf=b.f.t;
     if(af < bn || bf < an) return NO_SPAN();
-
-    float tN = max(an,bn);
-    float tF = min(af,bf);
+    float tN = max(an,bn); float tF = min(af,bf);
     if(tN > tF || tF < TOLERANCE) return NO_SPAN();
-
     Span outS = NO_SPAN();
     outS.mat = (an > bn) ? a.mat : b.mat;
-
-    // pick which boundary provides the hit data
     if(an > bn) outS.n = a.n; else outS.n = b.n;
-
-    // FIX: far must be the earlier exit (min)
     if(af < bf) outS.f = a.f; else outS.f = b.f;
-
-    outS.n.t = tN;
-    outS.f.t = tF;
+    outS.n.t = tN; outS.f.t = tF;
     return outS;
 }
 
 void subSpan(Span a, Span b, out Span o0, out Span o1){
-    o0 = NO_SPAN();
-    o1 = NO_SPAN();
+    o0 = NO_SPAN(); o1 = NO_SPAN();
     if(!spanAny(a)) return;
     if(!spanAny(b)){ o0 = a; return; }
-
     float an=a.n.t, af=a.f.t, bn=b.n.t, bf=b.f.t;
-
     if(af < bn || bf < an){ o0 = a; return; }
-
-    if(seq4(an,bn,af,bf)){
-        Span s = NO_SPAN();
-        s.n = a.n; s.f = b.n; s.mat = a.mat;
-        s.n.t = an; s.f.t = bn;
-        o0 = s;
-        return;
-    }
-
-    if(seq4(bn,an,bf,af)){
-        Span s = NO_SPAN();
-        s.n = b.f; s.f = a.f; s.mat = b.mat;
-        s.n.t = bf; s.f.t = af;
-        o0 = s;
-        return;
-    }
-
-    if(seq4(an,bn,bf,af)){
-        Span sA = NO_SPAN();
-        sA.n = a.n; sA.f = b.n; sA.mat = a.mat;
-        sA.n.t = an; sA.f.t = bn;
-
-        Span sB = NO_SPAN();
-        sB.n = b.f; sB.f = a.f; sB.mat = b.mat;
-        sB.n.t = bf; sB.f.t = af;
-
-        o0 = sA;
-        o1 = sB;
-        return;
-    }
-
-    if(seq4(bn,an,af,bf)){
-        return;
-    }
-
-    if(bn > an && bn < af){
-        Span sL = NO_SPAN();
-        sL.n = a.n; sL.f = b.n; sL.mat = a.mat;
-        sL.n.t = an; sL.f.t = bn;
-        o0 = sL;
-    }
-    if(bf > an && bf < af){
-        Span sR = NO_SPAN();
-        sR.n = b.f; sR.f = a.f; sR.mat = b.mat;
-        sR.n.t = bf; sR.f.t = af;
-        if(!spanAny(o0)) o0 = sR;
-        else o1 = sR;
-    }
+    if(seq4(an,bn,af,bf)){ Span s = NO_SPAN(); s.n = a.n; s.f = b.n; s.mat = a.mat; s.n.t = an; s.f.t = bn; o0 = s; return; }
+    if(seq4(bn,an,bf,af)){ Span s = NO_SPAN(); s.n = b.f; s.f = a.f; s.mat = b.mat; s.n.t = bf; s.f.t = af; o0 = s; return; }
+    if(seq4(an,bn,bf,af)){ Span sA = NO_SPAN(); sA.n = a.n; sA.f = b.n; sA.mat = a.mat; sA.n.t = an; sA.f.t = bn; o0 = sA; Span sB = NO_SPAN(); sB.n = b.f; sB.f = a.f; sB.mat = b.mat; sB.n.t = bf; sB.f.t = af; o1 = sB; return; }
+    if(seq4(bn,an,af,bf)) return;
+    if(bn > an && bn < af){ Span sL = NO_SPAN(); sL.n = a.n; sL.f = b.n; sL.mat = a.mat; sL.n.t = an; sL.f.t = bn; o0 = sL; }
+    if(bf > an && bf < af){ Span sR = NO_SPAN(); sR.n = b.f; sR.f = a.f; sR.mat = b.mat; sR.n.t = bf; sR.f.t = af; if(!spanAny(o0)) o0 = sR; else o1 = sR; }
 }
 
-struct Obj3 {
-    Span s0;
-    Span s1;
-    Span s2;
-};
-
-
-Obj3 ObjEmpty(){
-    Span z = NO_SPAN();
-    return Obj3(z,z,z);
-}
-
-Obj3 ObjFromSpan(Span s){
-    Span z = NO_SPAN();
-    return Obj3(s,z,z);
-}
-
+struct Obj3 { Span s0; Span s1; Span s2; };
+Obj3 ObjEmpty(){ Span z = NO_SPAN(); return Obj3(z,z,z); }
+Obj3 ObjFromSpan(Span s){ Span z = NO_SPAN(); return Obj3(s,z,z); }
 void addSpan(inout Obj3 o, Span s){
     if(!spanAny(s)) return;
-
     if(!spanAny(o.s0)){ o.s0 = s; return; }
     if(!spanAny(o.s1)){ o.s1 = s; return; }
     if(!spanAny(o.s2)){ o.s2 = s; return; }
-
     float t0 = o.s0.n.t, t1 = o.s1.n.t, t2 = o.s2.n.t;
-    int imax = (t1 > t0) ? 1 : 0;
-    float tmax = (imax==1) ? t1 : t0;
+    int imax = (t1 > t0) ? 1 : 0; float tmax = (imax==1) ? t1 : t0;
     if(t2 > tmax){ imax = 2; tmax = t2; }
-
-    if(s.n.t < tmax){
-        if(imax==0) o.s0 = s;
-        else if(imax==1) o.s1 = s;
-        else o.s2 = s;
-    }
+    if(s.n.t < tmax){ if(imax==0) o.s0 = s; else if(imax==1) o.s1 = s; else o.s2 = s; }
 }
+RayOut rayFromObj(Obj3 o){ RayOut r = NO_RAY(); FastAdd(r, rayFromSpan(o.s0)); FastAdd(r, rayFromSpan(o.s1)); FastAdd(r, rayFromSpan(o.s2)); return r; }
+Obj3 subObjSpan(Obj3 A, Span b){ Obj3 R = ObjEmpty(); Span x0,x1; subSpan(A.s0, b, x0, x1); addSpan(R, x0); addSpan(R, x1); subSpan(A.s1, b, x0, x1); addSpan(R, x0); addSpan(R, x1); subSpan(A.s2, b, x0, x1); addSpan(R, x0); addSpan(R, x1); return R; }
+Obj3 interObjSpan(Obj3 A, Span b){ Obj3 R = ObjEmpty(); if(spanAny(A.s0)) addSpan(R, interSpan(A.s0, b)); if(spanAny(A.s1)) addSpan(R, interSpan(A.s1, b)); if(spanAny(A.s2)) addSpan(R, interSpan(A.s2, b)); return R; }
 
-RayOut rayFromObj(Obj3 o){
-    RayOut r = NO_RAY();
-    FastAdd(r, rayFromSpan(o.s0));
-    FastAdd(r, rayFromSpan(o.s1));
-    FastAdd(r, rayFromSpan(o.s2));
-    return r;
-}
+vec4 fetchA(int x, int y){ return texelFetch(iChannel0, ivec2(x,y), 0); }
+vec4 getMaterial(float id){ return fetchA(int(id), 4); }
+vec3 erot(vec3 p, vec4 ax) { return mix(dot(p,ax.xyz)*ax.xyz,p,cos(ax.w))+sin(ax.w)*cross(ax.xyz,p); }
 
-Obj3 subObjSpan(Obj3 A, Span b){
-    Obj3 R = ObjEmpty();
-    Span x0,x1;
-
-    subSpan(A.s0, b, x0, x1); addSpan(R, x0); addSpan(R, x1);
-    subSpan(A.s1, b, x0, x1); addSpan(R, x0); addSpan(R, x1);
-    subSpan(A.s2, b, x0, x1); addSpan(R, x0); addSpan(R, x1);
-
-    return R;
-}
-
-Obj3 interObjSpan(Obj3 A, Span b){
-    Obj3 R = ObjEmpty();
-    if(spanAny(A.s0)) addSpan(R, interSpan(A.s0, b));
-    if(spanAny(A.s1)) addSpan(R, interSpan(A.s1, b));
-    if(spanAny(A.s2)) addSpan(R, interSpan(A.s2, b));
-    return R;
-}
-
-// ---  helpers  ---
-vec4 fetchA(int x, int y){
-    return texelFetch(iChannel0, ivec2(x,y), 0);
-}
-vec4 getMaterial(float id){
-    return fetchA(int(id),4);
-
-}
-
-vec3 erot(vec3 p, vec4 ax) {
-    return mix(dot(p,ax.xyz)*ax.xyz,p,cos(ax.w))+sin(ax.w)*cross(ax.xyz,p);
-}
-
-void getShape(int j, out vec3 p, out vec3 b, out int sh, out vec3 axis, out float rotSpeed, out float m){
-    vec4 v0 = fetchA(j,0);
-    vec4 v1 = fetchA(j,1);
-    vec4 v2 = fetchA(j,2);
-
-    p = v0.xyz;
-    sh = int(floor(v0.w + 0.5));
-
-    b = v1.xyz;
-    m = v1.w;
-
-    axis = v2.xyz;
-    rotSpeed = v2.w;
+void getShape(int j, out vec3 p, out vec3 b, out int sh, out vec3 axis, out float ang, out float m){
+    vec4 v0 = fetchA(j,0); vec4 v1 = fetchA(j,1); vec4 v2 = fetchA(j,2);
+    p = v0.xyz; sh = int(floor(v0.w + 0.5)); b = v1.xyz; m = v1.w; axis = v2.xyz; ang = v2.w;
 }
 
 Span iBox( in vec3 ro, in vec3 rd, vec3 boxSize) 
 {
-    vec3 m = 1./rd; 
-    vec3 n = m*ro;   
-    vec3 k = abs(m)*boxSize;
-
-    vec3 t1 = -n - k;
-    vec3 t2 = -n + k;
+    vec3 m = 1./rd; vec3 n = m*ro; vec3 k = abs(m)*boxSize;
+    vec3 t1 = -n - k; vec3 t2 = -n + k;
     float tN = max( max( t1.x, t1.y ), t1.z );
     float tF = min( min( t2.x, t2.y ), t2.z );
-    if( tN>tF || tF<0.) return NO_SPAN(); // no intersection
+    if( tN>tF || tF<0.) return NO_SPAN(); 
     vec3 oNor = -sign(rd)*step(t1.yzx,t1.xyz)*step(t1.zxy,t1.xyz); 
-    vec3  fNor=- sign(rd)*step(t2.xyz,t2.yzx)*step(t2.xyz,t2.zxy); 
-    return  Span(Hit(tN,oNor) , Hit(tF,fNor),0.);
+    vec3 fNor = -sign(rd)*step(t2.xyz,t2.yzx)*step(t2.xyz,t2.zxy); 
+    return Span(Hit(tN,oNor) , Hit(tF,fNor), 0.);
 }
 
 int trace(vec3 rd, vec3 ro, out RayOut r){
-    r = NO_RAY();
-    int cnt=0;
-
-
+    r = NO_RAY(); int cnt=0;
     int NOPS = int(${MAX_OPS});
     Obj3 reg = ObjEmpty();
-
     for(int k = ZERO; k < NOPS; k++){
-        vec4 opv = fetchA(k, 3);                 // default: (tp, src, end, 0)
-         cnt++;
-        int tp  = int(opv.x );
-        int j   = int(opv.y );
-        int add = int(opv.w );
+        vec4 opv = fetchA(k, 3);
+        if(opv.x < 0.0) break; // NUOVA CONDIZIONE DI USCITA
+        cnt++;
+        int tp = int(opv.x); int j = int(opv.y); int visible = int(opv.w);
 
-        int end = (tp == 6) ? int(opv.w) : int(opv.z);
-
-        // ------------------------------------------------------------
-        // tp == 6 : CHECK_BOUNDS + JUMP
         if(tp == 6){
             int jumpTo = int(floor(opv.z + 0.5));
-
-            vec3 p, b, axis;
-            float ang, m;
-            int sh;
+            vec3 p, b, axis; float ang, m; int sh;
             getShape(j, p, b, sh, axis, ang, m);
-            
-            bool hitB = (iBox(ro-p, rd, b).n.t<NOHIT);
+            bool hitB = (iBox(ro-p, rd, b).n.t < NOHIT);
             if(!hitB && jumpTo > k) k = jumpTo - 1;
-            
-            if(end > 0) break;
+            if(visible == 1) FastAdd(r, rayFromObj(reg));
             continue;
         }
-        // ------------------------------------------------------------
 
         Span s = NO_SPAN();
-
-        // only build a span when needed (load/sub/inter)
         if(tp < 4){
-        
-            vec3 p, b, axis;
-            float ang, m;
-            int sh;
-
+            vec3 p, b, axis; float ang, m; int sh;
             getShape(j, p, b, sh, axis, ang, m);
-
-            vec3 roR = ro - p;
-            vec3 rdR = rd;
-
-            if(ang != 0.0){
-                vec4 ax = vec4(axis, ang);
-                roR = erot(roR, ax);
-                rdR = erot(rdR, ax);
-            }
-
-            
+            vec3 roR = ro - p; vec3 rdR = rd;
+            if(ang != 0.0){ vec4 ax = vec4(axis, ang); roR = erot(roR, ax); rdR = erot(rdR, ax); }
             if(length(cross(roR, rdR)) <= length(b)){
-               
-                bool csg =(add==0 || (tp>=2&& tp<=3));
-                if(sh==0) s = iBox(roR, rdR, b); else
-                s = iSupportFunction(roR, rdR, b, sh, csg);
+                bool csg = (tp >= 2 && tp <= 3);
+                if(sh == 0) s = iBox(roR, rdR, b); else s = iSupportFunction(roR, rdR, b, sh, csg);
                 s.mat = m;
-
-                if(ang != 0.0){
-                    vec4 invAx = vec4(axis, -ang);
-                    s.n.n = erot(s.n.n, invAx);
-                    s.f.n = erot(s.f.n, invAx);
-                }
+                if(ang != 0.0){ vec4 invAx = vec4(axis, -ang); s.n.n = erot(s.n.n, invAx); s.f.n = erot(s.f.n, invAx); }
             }
-            
         }
 
-        // ops on registry
-        if(tp == 0){
-            reg = ObjFromSpan(s);          // load
-        } else if(tp == 1){
-            addSpan(reg, s);               // add as span
-    
-        } else if(tp == 2){
-            reg = subObjSpan(reg, s);      // sub
-        } else if(tp == 3){
-            reg = interObjSpan(reg, s);    // inter
-        } 
+        if(tp == 0) reg = ObjFromSpan(s);
+        else if(tp == 1) addSpan(reg, s);
+        else if(tp == 2) reg = subObjSpan(reg, s);
+        else if(tp == 3) reg = interObjSpan(reg, s);
         
-        if(tp == 5 || add==1){
-            FastAdd(r, rayFromObj(reg));   // out
-        }
-
-        if(end > 0) break;
+        if(visible == 1) FastAdd(r, rayFromObj(reg));
     }
-
     return cnt;
 }
-
-
 
 mat3 setCamera( in vec3 ro, in vec3 ta, float cr ) {
 	vec3 cw = normalize(ta-ro);
@@ -576,11 +333,6 @@ mat3 setCamera( in vec3 ro, in vec3 ta, float cr ) {
 	vec3 cv =          ( cross(cu,cw) );
     return mat3( cu, cv, cw );
 }
-
-//
-// Hash functions by Nimitz:
-// https://www.shadertoy.com/view/Xt3cDn
-//
 
 uint baseHash( uvec2 p ) {
     p = 1103515245U*((p >> 1U)^(p.yx));
@@ -598,32 +350,6 @@ vec2 hash2( inout float seed ) {
     uvec2 rz = uvec2(n, n*48271U);
     return vec2(rz.xy & uvec2(0x7fffffffU))/float(0x7fffffff);
 }
-// ------------------------------------------------------------
-
-
-vec4 worldhit( in vec3 ro, in vec3 rd, in vec2 dist, out vec3 normal ) {
-   RayOut h;
-   
-    vec4  d = vec4(dist, 0.,trace(rd, ro, h));
-   
-    if( h.d<d.y && h.d>d.x &&  h.d< NOHIT) {
-        normal=h.n;
-        d.xyz=vec3(d.y, h.d, h.id);
-    }
-	return d;    
-}
-
-//
-// Palette by Íñigo Quílez: 
-// https://www.shadertoy.com/view/ll2GD3
-//
-vec3 pal(in float t, in vec3 a, in vec3 b, in vec3 c, in vec3 d) {
-    return a + b*cos(6.28318530718*(c*t+d));
-}
-
-float checkerBoard( vec2 p ) {
-   return mod(floor(p.x) + floor(p.y), 2.);
-}
 
 vec3 getSkyColor( vec3 rd ) {
     vec3 col = mix(vec3(.5,.5,1.),vec3(0.114,0.243,0.153), smoothstep(.05,-.05,rd.y));
@@ -632,21 +358,13 @@ vec3 getSkyColor( vec3 rd ) {
     return col;
 }
 
-void getMaterialProperties(in vec3 pos, in float mat, 
-                           out vec3 albedo, out float type, out float roughness) {
+void getMaterialProperties(in vec3 pos, in float mat, out vec3 albedo, out float type, out float roughness) {
     vec4 m = getMaterial(mat);
-    albedo=m.rgb;
+    albedo = m.rgb;
     roughness = fract(m.a);
     type = floor(m.a);
-        
-    if( mat < 1.5 ) {            
-        albedo*= mix(1.,.8,checkerBoard(pos.xz ));
-    }
+    if( mat < 1.5 ) albedo *= mix(1.,.8, mod(floor(pos.x)+floor(pos.z),2.));
 }
-
-// ------------------------------------------------
-// Simple ray tracer by Reinder
-// ------------------------------------------
 
 float FresnelSchlickRoughness( float cosTheta, float F0, float roughness ) {
     return F0 + (max((1. - roughness), F0) - F0) * pow(abs(1. - cosTheta), 5.0);
@@ -660,151 +378,98 @@ vec3 cosWeightedRandomHemisphereDirection( const vec3 n, inout float seed ) {
 	float rx = ra*cos(6.28318530718*r.x); 
 	float ry = ra*sin(6.28318530718*r.x);
 	float rz = sqrt(1.-r.y);
-	vec3  rr = vec3(rx*uu + ry*vv + rz*n);
-    return normalize(rr);
+    return normalize(vec3(rx*uu + ry*vv + rz*n));
 }
-float schlick(float cosine, float r0) {
-    return r0 + (1.-r0)*pow((1.-cosine),5.);
-}
-
 
 vec3 modifyDirectionWithRoughness( const vec3 normal, const vec3 n, const float roughness, inout float seed ) {
     vec2 r = hash2(seed);
-    
-	vec3  uu = normalize(cross(n, abs(n.y) > .5 ? vec3(1.,0.,0.) : vec3(0.,1.,0.)));
-	vec3  vv = cross(uu, n);
-	
+	vec3 uu = normalize(cross(n, abs(n.y) > .5 ? vec3(1.,0.,0.) : vec3(0.,1.,0.)));
+	vec3 vv = cross(uu, n);
     float a = roughness*roughness;
-    
 	float rz = sqrt(abs((1.0-r.y) / clamp(1.+(a - 1.)*r.y,.00001,1.)));
 	float ra = sqrt(abs(1.-rz*rz));
-	float rx = ra*cos(6.28318530718*r.x); 
-	float ry = ra*sin(6.28318530718*r.x);
-	vec3  rr = vec3(rx*uu + ry*vv + rz*n);
-    
+	vec3 rr = vec3(ra*cos(6.28318530718*r.x)*uu + ra*sin(6.28318530718*r.x)*vv + rz*n);
     vec3 ret = normalize(rr);
     return dot(ret,normal) > 0. ? ret : n;
 }
 
-
 vec4 render( in vec3 ro, in vec3 rd, inout float seed ,bool fast) {
-    vec3 albedo, normal, col = vec3(1.); 
-    float roughness, type,cnt=0.;
+    vec3 albedo, col = vec3(1.); 
+    float roughness, type;
+    int total_cnt = 0;
     
-    for (int i=ZERO; i<PATH_LENGTH; ++i) {    
-    	vec4 res = worldhit( ro, rd, vec2(1e-4, 100), normal );
-        if(fast){
-            if(res.z < 0.) return  vec4(0,0,0,cnt);
-
-            vec3 p = ro + rd*res.y;
-            vec3 alb = getMaterial(res.z).rgb;           
+    for (int i=ZERO; i<PATH_LENGTH; ++i) {
+        RayOut h;
+        int cnt = trace(rd, ro, h);
+        if(i==0) total_cnt = cnt;
+        
+        if(fast && i==0){
+            if(h.id < 0.) return vec4(0,0,0,cnt);
+            vec3 alb = getMaterial(h.id).rgb;           
             vec3 ld = normalize(LIGHTDIR);
-            float l1  = max(0.0, 0.5 + 0.5*dot(ld, normal));
-            float spe = max(0.0, dot(rd, reflect(ld, normal))) * 0.2;
-            float fre = smoothstep(0.7, 1.0, 1.0 + dot(rd, normal));
-            vec3 lig = ((l1*0.8+ 0.2) + spe) * vec3(1.0) * 2.5;
-            vec3 col = mix(0.3, 0.4, fre) * lig * alb;
-            return vec4(col,cnt);
-             
+            float l1 = max(0.0, 0.5 + 0.5*dot(ld, h.n));
+            float spe = max(0.0, dot(rd, reflect(ld, h.n))) * 0.2;
+            float fre = smoothstep(0.7, 1.0, 1.0 + dot(rd, h.n));
+            vec3 col_f = mix(0.3, 0.4, fre) * ((l1*0.8+0.2)+spe) * vec3(2.5) * alb;
+            return vec4(col_f, h.d);             
         }
-        if(i==0) cnt=res.w;
-		if (res.z > 0.) {
-			ro += rd * res.y;
-       		
-            getMaterialProperties(ro, res.z, albedo, type, roughness);
+        
+		if (h.id >= 0. && h.d < NOHIT) {
+			ro += rd * h.d;
+            getMaterialProperties(ro, h.id, albedo, type, roughness);
             
-            if (type < LAMBERTIAN+.5) { // Added/hacked a reflection term
-                float F = FresnelSchlickRoughness(max(0.,-dot(normal, rd)), .04, roughness);
-                if (F > hash1(seed)) {
-                    rd = modifyDirectionWithRoughness(normal, reflect(rd,normal), roughness, seed);
-                } else {
-                    col *= albedo;
-			        rd = cosWeightedRandomHemisphereDirection(normal, seed);
-                }
+            if (type < LAMBERTIAN+.5) {
+                float F = FresnelSchlickRoughness(max(0.,-dot(h.n, rd)), .04, roughness);
+                if (F > hash1(seed)) rd = modifyDirectionWithRoughness(h.n, reflect(rd,h.n), roughness, seed);
+                else { col *= albedo; rd = cosWeightedRandomHemisphereDirection(h.n, seed); }
             } else if (type < METAL+.5) {
                 col *= albedo;
-                rd = modifyDirectionWithRoughness(normal, reflect(rd,normal), roughness, seed);            
+                rd = modifyDirectionWithRoughness(h.n, reflect(rd,h.n), roughness, seed);
+            } else if (type < EMISSIVE+.5) {
+                return vec4(col * albedo * 10.0, total_cnt); // BOOST EMISSIVE
             } else { // DIELECTRIC
-                vec3 normalOut, refracted;
-                float ni_over_nt, cosine, reflectProb = 1.;
-                if (dot(rd, normal) > 0.) {
-                    normalOut = -normal;
-            		ni_over_nt = 1.4;
-                    cosine = dot(rd, normal);
-                    cosine = sqrt(1.-(1.4*1.4)-(1.4*1.4)*cosine*cosine);
-                } else {
-                    normalOut = normal;
-                    ni_over_nt = 1./1.4;
-                    cosine = -dot(rd, normal);
-                }
-            
-	            // Refract the ray.
-	            refracted = refract(normalize(rd), normalOut, ni_over_nt);
-    	        
-        	    // Handle total internal reflection.
-                if(refracted != vec3(0)) {
-                	float r0 = (1.-ni_over_nt)/(1.+ni_over_nt);
-	        		reflectProb = FresnelSchlickRoughness(cosine, r0*r0, roughness);
-                }
-                
-                rd = hash1(seed) <= reflectProb ? reflect(rd,normal) : refracted;
+                vec3 normalOut; float ni_over_nt, cosine, reflectProb = 1.;
+                if (dot(rd, h.n) > 0.) { normalOut = -h.n; ni_over_nt = 1.4; cosine = dot(rd, h.n); }
+                else { normalOut = h.n; ni_over_nt = 1./1.4; cosine = -dot(rd, h.n); }
+	            vec3 refracted = refract(normalize(rd), normalOut, ni_over_nt);
+                if(refracted != vec3(0)) reflectProb = FresnelSchlickRoughness(cosine, pow((1.-ni_over_nt)/(1.+ni_over_nt),2.), roughness);
+                rd = hash1(seed) <= reflectProb ? reflect(rd,h.n) : refracted;
                 rd = modifyDirectionWithRoughness(-normalOut, rd, roughness, seed);            
             }
         } else {
-            col *= getSkyColor(rd);
-			return vec4(col,cnt);
+            return vec4(col * getSkyColor(rd), total_cnt);
         }
     }  
-    return vec4(0,0,0,cnt);
+    return vec4(0,0,0,total_cnt);
 }
-
 
 void main() {
     vec2 fragCoord = gl_FragCoord.xy;   
-               
-        vec4 ro = fetchA(1,5);
-        vec4 ta = fetchA(2,5);
-        vec4 mode = fetchA(3,5);
-        mat3 ca = setCamera(ro.xyz, ta.xyz, ro.w);    
-        vec3 normal;
-        vec2 uv = (-iResolution.xy + 2.*fragCoord - 1.)/iResolution.y;
-        
-        vec4 col=vec4(0);
-        float seed = float(baseHash(floatBitsToUint(uv- iTime)))/float(0xffffffffU);
-                 
-        // AA
-        uv += 2.*hash2(seed)/iResolution.y ;
-        vec3 rd = ca * normalize( vec3(uv,ta.w) );  
-        col= render(ro.xyz, rd, seed,mode.x==1.);
-        
-        if(mode.x!=1.){
-            bool reset=texelFetch(iChannel0, ivec2(0,5), 0).x>.5;
-
-            vec4 prev = texelFetch(iChannel1, ivec2(fragCoord), 0);
-            
-            float w = reset ? 1.0 : prev.w + 1.0;
-            fragColor.rgb = mix(prev.rgb, col.rgb, 1.0 / w);
-            fragColor.w = w;
-        }else{
-            fragColor.rgb =vec3(col.rgb);// + (col.w/100.));
-        }
- 
+    vec4 ro = fetchA(1,5); vec4 ta = fetchA(2,5); vec4 mode = fetchA(3,5);
+    mat3 ca = setCamera(ro.xyz, ta.xyz, ro.w);    
+    vec2 uv0 = (-iResolution.xy + 2.*fragCoord - 1.)/iResolution.y;
+    float seed = float(baseHash(floatBitsToUint(uv0- iTime)))/float(0xffffffffU);
+    vec2 uv = uv0 + 2.*hash2(seed)/iResolution.y;
+    vec3 rd = ca * normalize( vec3(uv,ta.w) );  
+    vec4 col = render(ro.xyz, rd, seed, mode.x==1.);
+    
+    if(mode.x!=1.){
+        bool reset = texelFetch(iChannel0, ivec2(0,5), 0).x > .5;
+        vec4 prev = texelFetch(iChannel1, ivec2(fragCoord), 0);
+        float w = reset ? 1. : prev.w + 1.;
+        fragColor = vec4(mix(prev.rgb, col.rgb, 1.0/w), w);
+    } else {
+        fragColor = vec4(col.rgb, 1.0);
+    }
 }
-
 `;
 
 export const displayShader = `${header}
-// ============================================================
-// Post-Processing: Tone Mapping & Gamma Correction
-// ============================================================
 void main() {
     vec2 fc = gl_FragCoord.xy;
     vec3 col = texelFetch(iChannel1, ivec2(fc), 0).rgb;
-    
-    // Filmic Tone Mapping (Requested snippet)
     col = max(vec3(0.0), col - 0.004);
     col = (col * (6.2 * col + 0.5)) / (col * (6.2 * col + 1.7) + 0.06);
-    
     fragColor = vec4(col, 1.0);
 }
 `;
