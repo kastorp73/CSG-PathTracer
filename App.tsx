@@ -53,7 +53,10 @@ const createDefaultGeom = (matId = 0): Geometry => ({
 // --- APP ---
 
 const App: React.FC = () => {
-  const [scene, setScene] = useState<Scene>(initialScene as unknown as Scene);
+  const [scene, setSceneState] = useState<Scene>(initialScene as unknown as Scene);
+  const [past, setPast] = useState<Scene[]>([]);
+  const [future, setFuture] = useState<Scene[]>([]);
+  
   const [activeTab, setActiveTab] = useState<'logic' | 'materials'>('logic');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showData, setShowData] = useState(true);
@@ -62,6 +65,48 @@ const App: React.FC = () => {
   
   const shaderRef = useRef<ShaderCanvasHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Custom setScene with history support
+  const setScene = (newScene: Scene | ((prev: Scene) => Scene), saveHistory = true) => {
+    if (saveHistory) {
+      setPast(prev => [...prev, JSON.parse(JSON.stringify(scene))]);
+      setFuture([]);
+    }
+    if (typeof newScene === 'function') {
+      setSceneState(newScene);
+    } else {
+      setSceneState(newScene);
+    }
+  };
+
+  const handleUndo = () => {
+    if (past.length === 0) return;
+    const previous = past[past.length - 1];
+    const newPast = past.slice(0, past.length - 1);
+    
+    setFuture(prev => [JSON.parse(JSON.stringify(scene)), ...prev]);
+    setPast(newPast);
+    setSceneState(previous);
+  };
+
+  const handleRedo = () => {
+    if (future.length === 0) return;
+    const next = future[0];
+    const newFuture = future.slice(1);
+    
+    setPast(prev => [...prev, JSON.parse(JSON.stringify(scene))]);
+    setFuture(newFuture);
+    setSceneState(next);
+  };
+
+  const handleNew = () => {
+    const emptyScene: Scene = {
+      ...scene,
+      name: "New Scene",
+      logic: []
+    };
+    setScene(emptyScene);
+  };
 
   const usedMaterialIds = useMemo(() => {
     const ids = new Set<number>();
@@ -76,7 +121,6 @@ const App: React.FC = () => {
   }, [scene.logic]);
 
   const syncToGPU = () => {
-    // Inizializziamo tutto il buffer a -1.0 per garantire l'uscita dai loop (ops.x < 0)
     const buffer = new Float32Array(MAX_OPS * 6 * 4).fill(-1.0);
     const flatShapes: Geometry[] = [];
     const flatOps: any[] = [];
@@ -103,47 +147,38 @@ const App: React.FC = () => {
 
     scene.logic.forEach(processNode);
 
-    // Caricamento Geometrie (Row 0, 1, 2)
     flatShapes.slice(0, MAX_OPS).forEach((s, i) => {
       buffer.set([s.pos[0], s.pos[1], s.pos[2], s.type], (0 * MAX_OPS + i) * 4);
       buffer.set([s.size[0], s.size[1], s.size[2], s.matId], (1 * MAX_OPS + i) * 4);
       buffer.set([s.axis[0], s.axis[1], s.axis[2], s.angle], (2 * MAX_OPS + i) * 4);
     });
 
-    // Caricamento Operazioni (Row 3)
     flatOps.slice(0, MAX_OPS).forEach((op, i) => {
       const idx = (3 * MAX_OPS + i) * 4;
       if (op.type === 6) {
         const safeJump = Math.min(op.jumpTo, MAX_OPS);
-        // x: tipo, y: shapeIdx, z: jumpTo, w: visible
         buffer.set([6, op.shapeIdx, safeJump, op.isOut], idx);
       } else {
-        // x: tipo, y: shapeIdx, z: unused(0), w: visible
         buffer.set([op.type, op.shapeIdx, 0, op.isOut], idx);
       }
     });
 
-    // Caricamento Materiali (Row 4)
-    // FIX: Usiamo m.id come coordinata X invece dell'indice array i
     scene.materials.forEach((m) => {
       if (m.id >= 0 && m.id < MAX_OPS) {
         buffer.set([m.color[0], m.color[1], m.color[2], m.type + m.roughness], (4 * MAX_OPS + m.id) * 4);
       }
     });
 
-    // Stato di sistema (Row 5)
-    buffer[(5 * MAX_OPS + 0) * 4] = 1.0; // Reset flag
+    buffer[(5 * MAX_OPS + 0) * 4] = 1.0; 
     buffer[(5 * MAX_OPS + 3) * 4] = isFastRender ? 1.0 : 0.0; 
     
     shaderRef.current?.updateBufferData(buffer);
   };
 
-  // Effetto per sincronizzazione reattiva
   useEffect(() => {
     syncToGPU();
   }, [scene, isFastRender]);
 
-  // Ripristino sincronizzazione differita al caricamento (come richiesto)
   useEffect(() => {
     const timer = setTimeout(() => {
       syncToGPU();
@@ -153,7 +188,6 @@ const App: React.FC = () => {
 
   const handleSetExpandedId = (id: string | null) => {
     setExpandedId(id);
-    // Sincronizziamo anche all'espansione/collasso per sicurezza
     setTimeout(syncToGPU, 50);
   };
 
@@ -272,18 +306,23 @@ const App: React.FC = () => {
     navigator.clipboard.writeText(code).then(() => alert("GLSL code copied!"));
   };
 
-  const SliderWithButtons = ({ label, value, min, max, step = 0.5, onChange }: any) => (
+  const NumberInputWithButtons = ({ label, value, step = 0.5, onChange }: any) => (
     <div className="flex flex-col gap-0.5 group w-full overflow-hidden">
       <div className="flex justify-between text-[7px] uppercase font-black text-sky-400 px-0.5">
         <span>{label}</span>
-        <span className="text-sky-600 font-mono">{Number(value).toFixed(2)}</span>
       </div>
       <div className="flex items-center gap-1 w-full">
-        <button onClick={() => onChange(parseFloat((value - step).toFixed(2)))} className="w-5 h-4 flex-shrink-0 flex items-center justify-center bg-sky-50 text-sky-600 border border-sky-100 rounded hover:bg-sky-500 hover:text-white transition-colors text-[10px] font-bold">-</button>
-        <div className="flex-1 relative h-4 flex items-center">
-          <input type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(parseFloat(e.target.value))} className="w-full h-1 bg-sky-100 rounded-lg appearance-none cursor-pointer accent-sky-500 m-0" />
+        <button onClick={() => onChange(parseFloat((value - step).toFixed(2)))} className="w-5 h-5 flex-shrink-0 flex items-center justify-center bg-sky-50 text-sky-600 border border-sky-100 rounded hover:bg-sky-500 hover:text-white transition-colors text-[10px] font-bold">-</button>
+        <div className="flex-1 relative h-5 flex items-center">
+          <input 
+            type="number" 
+            step="0.01" 
+            value={Number(value).toFixed(2)} 
+            onChange={e => onChange(parseFloat(parseFloat(e.target.value).toFixed(2)))} 
+            className="w-full bg-white border border-sky-100 rounded px-1 py-0.5 text-[9px] font-bold text-sky-700 outline-none focus:border-sky-400 text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+          />
         </div>
-        <button onClick={() => onChange(parseFloat((value + step).toFixed(2)))} className="w-5 h-4 flex-shrink-0 flex items-center justify-center bg-sky-50 text-sky-600 border border-sky-100 rounded hover:bg-sky-500 hover:text-white transition-colors text-[10px] font-bold">+</button>
+        <button onClick={() => onChange(parseFloat((value + step).toFixed(2)))} className="w-5 h-5 flex-shrink-0 flex items-center justify-center bg-sky-50 text-sky-600 border border-sky-100 rounded hover:bg-sky-500 hover:text-white transition-colors text-[10px] font-bold">+</button>
       </div>
     </div>
   );
@@ -325,11 +364,11 @@ const App: React.FC = () => {
               </div>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
-              <button onClick={e => { e.stopPropagation(); duplicateNode(path); }} className="text-sky-300 hover:text-sky-600 transition-colors">
+              <button onClick={e => { e.stopPropagation(); duplicateNode(path); }} title="Duplicate" className="text-sky-300 hover:text-sky-600 transition-colors">
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" /></svg>
               </button>
               {!(node.children && node.children.length) && (
-                <button onClick={e => { e.stopPropagation(); deleteNode(path); }} className="text-rose-200 hover:text-rose-500 transition-colors">
+                <button onClick={e => { e.stopPropagation(); deleteNode(path); }} title="Delete" className="text-rose-200 hover:text-rose-500 transition-colors">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
               )}
@@ -340,7 +379,7 @@ const App: React.FC = () => {
               <div className="grid grid-cols-3 gap-2">
                 <div className="col-span-2">
                   <label className="text-[7px] font-black text-sky-400 uppercase">Name</label>
-                  <input type="text" value={node.name} onChange={e => updateNode({ name: e.target.value })} className="w-full bg-white border border-sky-100 rounded px-1.5 py-0.5 text-[9px] font-bold text-sky-700 outline-none" />
+                  <input type="text" value={node.name} onChange={e => updateNode({ name: e.target.value })} className="w-full bg-white border border-sky-100 rounded px-1.5 py-0.5 text-[9px] font-bold text-sky-700 outline-none focus:border-sky-400" />
                 </div>
                 <div>
                   <label className="text-[7px] font-black text-sky-400 uppercase">Op</label>
@@ -367,16 +406,14 @@ const App: React.FC = () => {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-2 border-r border-sky-50 pr-2">
-                      <SliderWithButtons label="Pos X" value={node.geometry.pos[0]} min={-20} max={20} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, pos: [v, node.geometry!.pos[1], node.geometry!.pos[2]] } })} />
-                      {/* FIX: Use parameter 'v' instead of undefined 'f' */}
-                      <SliderWithButtons label="Pos Y" value={node.geometry.pos[1]} min={-20} max={20} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, pos: [node.geometry!.pos[0], v, node.geometry!.pos[2]] } })} />
-                      {/* FIX: Use parameter 'v' instead of undefined 'f' */}
-                      <SliderWithButtons label="Pos Z" value={node.geometry.pos[2]} min={-20} max={20} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, pos: [node.geometry!.pos[0], node.geometry!.pos[1], v] } })} />
+                      <NumberInputWithButtons label="Pos X" value={node.geometry.pos[0]} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, pos: [v, node.geometry!.pos[1], node.geometry!.pos[2]] } })} />
+                      <NumberInputWithButtons label="Pos Y" value={node.geometry.pos[1]} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, pos: [node.geometry!.pos[0], v, node.geometry!.pos[2]] } })} />
+                      <NumberInputWithButtons label="Pos Z" value={node.geometry.pos[2]} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, pos: [node.geometry!.pos[0], node.geometry!.pos[1], v] } })} />
                     </div>
                     <div className="space-y-2">
-                      <SliderWithButtons label="Size W" value={node.geometry.size[0]} min={0.01} max={20} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, size: [v, node.geometry!.size[1], node.geometry!.size[2]] } })} />
-                      <SliderWithButtons label="Size H" value={node.geometry.size[1]} min={0.01} max={20} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, size: [node.geometry!.size[0], v, node.geometry!.size[2]] } })} />
-                      <SliderWithButtons label="Size D" value={node.geometry.size[2]} min={0.01} max={20} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, size: [node.geometry!.size[0], node.geometry!.size[1], v] } })} />
+                      <NumberInputWithButtons label="Size W" value={node.geometry.size[0]} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, size: [v, node.geometry!.size[1], node.geometry!.size[2]] } })} />
+                      <NumberInputWithButtons label="Size H" value={node.geometry.size[1]} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, size: [node.geometry!.size[0], v, node.geometry!.size[2]] } })} />
+                      <NumberInputWithButtons label="Size D" value={node.geometry.size[2]} onChange={(v:any) => updateNode({ geometry: { ...node.geometry!, size: [node.geometry!.size[0], node.geometry!.size[1], v] } })} />
                     </div>
                   </div>
                   <div className="bg-sky-50/50 p-2 rounded space-y-2">
@@ -417,23 +454,32 @@ const App: React.FC = () => {
               <input 
                 type="text" 
                 value={scene.name} 
-                onChange={e => setScene(prev => ({ ...prev, name: e.target.value }))} 
+                onChange={e => setScene({ ...scene, name: e.target.value })} 
                 className="flex-1 w-0 text-lg font-black text-sky-800 tracking-tighter uppercase bg-transparent border-b-2 border-transparent hover:border-sky-100 focus:border-sky-400 outline-none truncate pb-0.5" 
                 placeholder="Scene Name" 
               />
               <div className="flex gap-2 flex-shrink-0">
-                 <button onClick={copyGLSL} className="text-[8px] font-black uppercase text-sky-400 hover:text-sky-600 transition-colors">Copy GLSL</button>
-                 <button onClick={() => { const a = document.createElement('a'); const json = JSON.stringify(scene, null, 2); a.href = URL.createObjectURL(new Blob([json], {type: 'application/json'})); a.download = `${(scene.name || "untitled").toLowerCase().replace(/\s+/g, '-')}.json`; a.click(); }} className="text-[8px] font-black uppercase text-sky-400 hover:text-sky-600 transition-colors">Export</button>
-                 <button onClick={() => fileInputRef.current?.click()} className="text-[8px] font-black uppercase text-sky-400 hover:text-sky-600 transition-colors">Import</button>
-                 <input ref={fileInputRef} type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if(f) { const r = new FileReader(); r.onload = ev => { try { const d = JSON.parse(ev.target?.result as string); if (d && d.logic && d.materials) { if (!d.name) d.name = f.name.replace('.json', ''); setScene(d); } } catch(err) { alert("Invalid JSON"); } }; r.readAsText(f); } }} />
+                 <button onClick={handleUndo} disabled={past.length === 0} className={`text-[8px] font-black uppercase ${past.length === 0 ? 'text-gray-300 cursor-not-allowed' : 'text-sky-400 hover:text-sky-600'} transition-colors`}>Undo</button>
+                 <button onClick={handleRedo} disabled={future.length === 0} className={`text-[8px] font-black uppercase ${future.length === 0 ? 'text-gray-300 cursor-not-allowed' : 'text-sky-400 hover:text-sky-600'} transition-colors`}>Redo</button>
+                 <button onClick={handleNew} className="text-[8px] font-black uppercase text-sky-400 hover:text-sky-600 transition-colors">New</button>
               </div>
             </div>
+            
+            <div className="flex justify-between items-center px-1">
+              <div className="flex gap-3">
+                 <button onClick={() => { const a = document.createElement('a'); const json = JSON.stringify(scene, null, 2); a.href = URL.createObjectURL(new Blob([json], {type: 'application/json'})); a.download = `${(scene.name || "untitled").toLowerCase().replace(/\s+/g, '-')}.json`; a.click(); }} className="text-[8px] font-black uppercase text-sky-400 hover:text-sky-600 transition-colors">Export JSON</button>
+                 <button onClick={() => fileInputRef.current?.click()} className="text-[8px] font-black uppercase text-sky-400 hover:text-sky-600 transition-colors">Import JSON</button>
+                 <input ref={fileInputRef} type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if(f) { const r = new FileReader(); r.onload = ev => { try { const d = JSON.parse(ev.target?.result as string); if (d && d.logic && d.materials) { if (!d.name) d.name = f.name.replace('.json', ''); setScene(d); } } catch(err) { alert("Invalid JSON"); } }; r.readAsText(f); } }} />
+              </div>
+              <button onClick={copyGLSL} className="text-[8px] font-black uppercase text-amber-500 hover:text-amber-600 transition-colors">Copy GLSL</button>
+            </div>
+
             <div className="flex bg-sky-50 p-1 rounded-xl border border-sky-100">
               <button onClick={() => setActiveTab('logic')} className={`flex-1 py-1.5 text-[9px] font-black uppercase rounded-lg transition-all ${activeTab === 'logic' ? 'bg-white text-sky-600 shadow-sm' : 'text-sky-400'}`}>Logic Hierarchy</button>
               <button onClick={() => setActiveTab('materials')} className={`flex-1 py-1.5 text-[9px] font-black uppercase rounded-lg transition-all ${activeTab === 'materials' ? 'bg-white text-sky-600 shadow-sm' : 'text-sky-400'}`}>Materials</button>
             </div>
-            {activeTab === 'logic' && <button onClick={() => setScene(p => ({ ...p, logic: [...p.logic, { id: Math.random().toString(), name: "Root Op", type: 0, geometry: createDefaultGeom(0), isOut: true }] }))} className="w-full py-2 bg-sky-500 text-white text-[9px] font-black uppercase rounded-lg shadow-md hover:bg-sky-600 transition-all">+ Add Root Operation</button>}
-            {activeTab === 'materials' && <button onClick={() => setScene(p => ({ ...p, materials: [...p.materials, { id: p.materials.length, name: "New Mat", color: [0.5, 0.5, 0.5], type: 0, roughness: 0.5 }] }))} className="w-full py-2 bg-sky-500 text-white text-[9px] font-black uppercase rounded-lg shadow-md hover:bg-sky-600 transition-all">+ Add Material</button>}
+            {activeTab === 'logic' && <button onClick={() => setScene({ ...scene, logic: [...scene.logic, { id: Math.random().toString(), name: "Root Op", type: 0, geometry: createDefaultGeom(0), isOut: true }] })} className="w-full py-2 bg-sky-500 text-white text-[9px] font-black uppercase rounded-lg shadow-md hover:bg-sky-600 transition-all">+ Add Root Operation</button>}
+            {activeTab === 'materials' && <button onClick={() => setScene({ ...scene, materials: [...scene.materials, { id: scene.materials.length, name: "New Mat", color: [0.5, 0.5, 0.5], type: 0, roughness: 0.5 }] })} className="w-full py-2 bg-sky-500 text-white text-[9px] font-black uppercase rounded-lg shadow-md hover:bg-sky-600 transition-all">+ Add Material</button>}
           </div>
           <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-2 select-none" onMouseDown={e => e.stopPropagation()}>
             {activeTab === 'logic' && scene.logic.map((node, i) => renderLogicNode(node, [i]))}
